@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Screen Copilot",
+  "version": "1.0",
+  "description": "Chatbot that can see your screen and help with UI actions",
+  "permissions": ["activeTab", "scripting", "tabs", "<all_urls>"],
+  "host_permissions": ["http://127.0.0.1:8000/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "Screen Copilot",
+    "default_icon": {
+      "16": "icons/Gemini_Generated_Image_c8m6bmc8m6bmc8m6.png",
+      "48": "icons/Gemini_Generated_Image_c8m6bmc8m6bmc8m6.png",
+      "128": "icons/Gemini_Generated_Image_c8m6bmc8m6bmc8m6.png"
+    }
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_end"
+    }
+  ]
+}
