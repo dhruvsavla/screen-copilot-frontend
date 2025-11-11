@@ -1,31 +1,29 @@
 if (!window.screenCopilotInjected) {
   window.screenCopilotInjected = true;
 
-  // --- *** NEW: Listen for token from the login page *** ---
+  // --- Listen for token from the login page ---
   window.addEventListener("message", (event) => {
-    // Check for security: only accept from our own app
-    if (event.origin !== "http://localhost:3000" && event.origin !== "http://127.0.0.1:3000") {
-      return;
-    }
-
+    // No origin check, accept from anywhere
     if (event.data && event.data.type === "NEXAURA_AUTH_TOKEN") {
       const token = event.data.token;
       if (token) {
         chrome.storage.local.set({ "nexaura_token": token }, () => {
-          console.log("NexAura: Token received from page and saved to chrome.storage.");
+          console.log("NexAura: Token received and saved.");
+          // Send the "thank you" message back to the login page
+          window.postMessage({ type: "NEXAURA_TOKEN_RECEIVED" }, "*");
         });
       }
     }
   }, false);
-  // --- *** END OF NEW LISTENER *** ---
 
 
   // --- Global State Variables ---
+  // These are now just local "caches" of the true state,
+  // which will be held in chrome.storage.
   let isRecording = false;
-  let currentGuideSteps = [];
   let playbackGuide = null;
   let currentStepIndex = 0;
-  let isProgrammaticallyClicking = false; // Flag to prevent recording loops
+  let isProgrammaticallyClicking = false;
 
   // --- ROBUST CSS Selector Generator ---
   function getCssSelector(el) {
@@ -33,7 +31,10 @@ if (!window.screenCopilotInjected) {
     const path = [];
     while (el.nodeType === Node.ELEMENT_NODE) {
       let selector = el.nodeName.toLowerCase();
-      
+      let foundStableAttr = false;
+      let stableClasses = []; // <-- FIX: Declared at the top of the loop
+
+      // 1. Stable ID
       const id = el.id;
       const isStableId = id && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id);
       if (isStableId) {
@@ -42,34 +43,45 @@ if (!window.screenCopilotInjected) {
         break; 
       }
 
-      const stableAttrs = ['data-testid', 'data-test-id', 'name', 'aria-label', 'placeholder'];
-      let foundStableAttr = false;
+      // 2. Stable, unique attributes
+      const stableAttrs = ['data-testid', 'data-test-id', 'name', 'aria-label', 'placeholder', 'role'];
       for (const attr of stableAttrs) {
         const value = el.getAttribute(attr);
         if (value) {
           selector += `[${attr}="${value}"]`;
           foundStableAttr = true;
-          break;
+          break; 
         }
       }
       
-      const stableClasses = Array.from(el.classList)
-        .filter(c => !/[.:]/.test(c));
-      if (stableClasses.length > 0) {
-        selector += '.' + stableClasses.join('.');
+      // 3. Stable Classes (ONLY if no stable attribute was found)
+      if (!foundStableAttr) {
+        stableClasses = Array.from(el.classList) 
+          .filter(c => /^[a-zA-Z_-]+$/.test(c)); 
+        if (stableClasses.length > 0) {
+          selector += '.' + stableClasses.join('.');
+        }
       }
 
-      let sib = el,
-        nth = 1;
-      while ((sib = sib.previousElementSibling)) {
-        if (sib.nodeName.toLowerCase() === el.nodeName.toLowerCase()) nth++;
-      }
-      
-      if (nth > 1) {
-        selector += `:nth-of-type(${nth})`;
+      // 4. Fallback to nth-of-type (ONLY if no stable attr OR classes)
+      if (!foundStableAttr && stableClasses.length === 0) {
+        let sib = el,
+          nth = 1;
+        while ((sib = sib.previousElementSibling)) {
+          if (sib.nodeName.toLowerCase() === el.nodeName.toLowerCase()) nth++;
+        }
+        
+        if (nth > 1) {
+          selector += `:nth-of-type(${nth})`;
+        }
       }
 
       path.unshift(selector);
+
+      if (foundStableAttr) {
+        break;
+      }
+
       el = el.parentNode;
     }
     return path.join(' > ');
@@ -103,79 +115,83 @@ if (!window.screenCopilotInjected) {
   `;
   document.body.appendChild(recordingBar);
 
-  // --- UPDATED: Stop button logic (Saves to DB) ---
-  // ... in content.js
+  // --- NEW: Function to show and activate the recording bar ---
+  function showRecordingBar() {
+    recordingBar.style.display = "block";
+    
+    // Attach listener for stopping
+    document.getElementById("sc-stop-recording").onclick = () => {
+      isRecording = false;
+      recordingBar.style.display = "none";
+      document.body.removeEventListener("click", onRecordClick, true);
 
-  // --- *** UPDATED: Stop button logic (Saves to DB) *** ---
-  // --- *** UPDATED: Stop button logic (Saves to DB) *** ---
-  document.getElementById("sc-stop-recording").onclick = () => {
-    isRecording = false;
-    recordingBar.style.display = "none";
-    document.body.removeEventListener("click", onRecordClick, true);
+      // Get steps from storage, not a local variable
+      chrome.storage.local.get(["currentGuideSteps", "nexaura_token"], async (result) => {
+        const currentGuideSteps = result.currentGuideSteps || [];
+        const token = result.nexaura_token;
 
-    if (currentGuideSteps.length > 0) {
-      const guideName = prompt("Save this guide as:", "My New Guide");
-      if (!guideName) return; // User cancelled
+        // **Clear recording state from storage**
+        await chrome.storage.local.set({ isRecording: false, currentGuideSteps: [] });
 
-      const guideShortcut = prompt(
-          `Enter a shortcut (e.g., "/${guideName.toLowerCase().replace(/\s/g, '-')}"):`,
-          `/${guideName.toLowerCase().replace(/\s/g, '-')}`
-      );
-      if (!guideShortcut) return; // User cancelled
-        
-      // --- *** THIS IS THE NEW CODE YOU ARE MISSING *** ---
-      const guideDescription = prompt("Enter a short description for this guide:");
-      if (guideDescription === null) return; // User cancelled
-      // --- *** END OF NEW CODE *** ---
+        if (currentGuideSteps.length > 0) {
+          const guideName = prompt("Save this guide as:", "My New Guide");
+          if (!guideName) return; 
 
-      const guide = {
-        name: guideName,
-        shortcut: guideShortcut,
-        description: guideDescription, // <-- THIS LINE IS NOW ADDED
-        steps: currentGuideSteps,
-      };
+          const guideShortcut = prompt(
+              `Enter a shortcut (e.g., "/${guideName.toLowerCase().replace(/\s/g, '-')}"):`,
+              `/${guideName.toLowerCase().replace(/\s/g, '-')}`
+          );
+          if (!guideShortcut) return; 
+            
+          const guideDescription = prompt("Enter a short description for this guide:");
+          if (guideDescription === null) return; 
 
-      // Get token and save to backend
-      chrome.storage.local.get("nexaura_token", async (result) => {
-        if (!result.nexaura_token) {
-          appendMessage("bot", "<strong>Error:</strong> You are not logged in. Please log in from the extension's landing page.", true);
-          return;
-        }
+          const guide = {
+            name: guideName,
+            shortcut: guideShortcut,
+            description: guideDescription,
+            steps: currentGuideSteps, // Use steps from storage
+          };
 
-        try {
-          const response = await fetch("http://127.0.0.1:8000/api/guides/", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${result.nexaura_token}`
-            },
-            body: JSON.stringify(guide) // This object now includes the description
-          });
-
-          if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || "Failed to save guide");
+          if (!token) {
+            appendMessage("bot", "<strong>Error:</strong> You are not logged in. Please log in from the extension's landing page.", true);
+            return;
           }
 
-          appendMessage(
-            "bot",
-            `Guide "${guideName}" saved! You can run it by typing <strong>${guideShortcut}</strong>.`,
-            true
-          );
-          container.style.display = "flex";
-        } catch (err) {
-          appendMessage("bot", `<strong>Error:</strong> ${err.message}`, true);
+          try {
+            const response = await fetch("http://127.0.0.1:8000/api/guides/", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`
+              },
+              body: JSON.stringify(guide)
+            });
+
+            if (!response.ok) {
+              const err = await response.json();
+              throw new Error(err.detail || "Failed to save guide");
+            }
+
+            appendMessage(
+              "bot",
+              `Guide "${guideName}" saved! You can run it by typing <strong>${guideShortcut}</strong>.`,
+              true
+            );
+            container.style.display = "flex";
+          } catch (err) {
+            appendMessage("bot", `<strong>Error:</strong> ${err.message}`, true);
+          }
         }
       });
-        
-    }
-    currentGuideSteps = []; // Reset
-  };
+    };
+    
+    // Attach listener for recording
+    document.body.addEventListener("click", onRecordClick, true);
+  }
 
-// ... (rest of content.js)
-
-  // --- CORRECTED: Recording Click Listener ---
-  function onRecordClick(event) {
+  // --- UPDATED: Recording Click Listener ---
+  async function onRecordClick(event) {
     if (!isRecording || isProgrammaticallyClicking) {
       return;
     }
@@ -195,10 +211,11 @@ if (!window.screenCopilotInjected) {
     const selector = getCssSelector(target);
     if (!selector) {
       console.warn("NexAura: Could not generate selector for", target);
-      // Even if we fail, we must re-dispatch the click
       isProgrammaticallyClicking = true;
-      target.click();
-      setTimeout(() => { isProgrammaticallyClicking = false; }, 0);
+      if (typeof target.click === 'function') {
+        target.click();
+      }
+      setTimeout(() => { isProgrammaticallyClicking = false; }, 100);
       return;
     }
 
@@ -214,22 +231,50 @@ if (!window.screenCopilotInjected) {
     const instruction = prompt(`Step ${currentGuideSteps.length + 1}: What should the user do here?`);
     
     if (instruction) {
-      currentGuideSteps.push({
+      const isInput = (target.tagName === 'INPUT' && (target.type === 'text' || target.type === 'email' || target.type === 'password' || target.type === 'search')) || target.tagName === 'TEXTAREA';
+      const isContentEditable = target.isContentEditable;
+      
+      let actionType = 'click';
+      let value = null;
+
+      if (isInput) {
+        actionType = 'type';
+        value = target.value;
+      } else if (isContentEditable) {
+        actionType = 'type';
+        value = target.innerText;
+      }
+
+      const newStep = {
         selector: selector,
         instruction: instruction,
-      });
-      console.log("Added step:", { selector, instruction });
+        action: actionType,
+        value: value,
+        // NEW: Save the URL to check for navigation
+        url: window.location.href 
+      };
+
+      // *** NEW: Save to storage instead of local array ***
+      const result = await chrome.storage.local.get("currentGuideSteps");
+      const steps = result.currentGuideSteps || [];
+      steps.push(newStep);
+      await chrome.storage.local.set({ currentGuideSteps: steps });
+      
+      console.log("Added step:", newStep);
+
     } else {
-      // User cancelled the prompt, don't execute the click
-      return;
+      return; // User cancelled prompt, do not click
     }
 
-    // FIX: Prevent recording loop
     isProgrammaticallyClicking = true;
-    target.click();
+    if (typeof target.click === 'function' && currentGuideSteps[currentGuideSteps.length - 1].action === 'click') {
+        target.click();
+    } else {
+        target.focus();
+    }
     setTimeout(() => {
       isProgrammaticallyClicking = false;
-    }, 0); 
+    }, 100); // 100ms delay
   }
 
   // -------------------
@@ -239,13 +284,16 @@ if (!window.screenCopilotInjected) {
   function startPlayback(guide) {
     playbackGuide = guide;
     currentStepIndex = 0;
-    container.style.display = "flex"; // Ensure chat is open
+    container.style.display = "flex"; 
     showPlaybackStep();
   }
 
+  // --- UPDATED: Playback Step Logic ---
   function showPlaybackStep() {
-    if (!playbackGuide) return; // Check if playback was stopped
+    if (!playbackGuide) return; 
 
+    const isLastStep = currentStepIndex === playbackGuide.steps.length - 1;
+    
     if (currentStepIndex >= playbackGuide.steps.length) {
       finishPlayback();
       return;
@@ -254,7 +302,19 @@ if (!window.screenCopilotInjected) {
     const step = playbackGuide.steps[currentStepIndex];
     let element = null;
     
+    // NEW: Check if the URL matches before finding the element
+    if (step.url && !window.location.href.startsWith(step.url)) {
+        appendMessage(
+            "bot",
+            `<strong>Error:</strong> This step was recorded on a different page. Please navigate to <strong>${step.url}</strong> and try again.`,
+            true
+        );
+        // Don't finish, just wait for the user to navigate
+        return;
+    }
+    
     try {
+     console.log(`NexAura: Finding element for Step ${currentStepIndex + 1} with selector:`, step.selector);
      element = document.querySelector(step.selector);
     } catch(e) {
       console.error("NexAura: Invalid selector", step.selector, e);
@@ -267,7 +327,7 @@ if (!window.screenCopilotInjected) {
         true
       );
       finishPlayback();
-      return; // Stop execution
+      return; 
     }
 
     const rect = element.getBoundingClientRect();
@@ -279,7 +339,7 @@ if (!window.screenCopilotInjected) {
         h: rect.height,
         summary: `Step ${currentStepIndex + 1}: ${step.instruction}`,
       }],
-      60000 // Keep highlight for 60s or until next step
+      60000 
     );
     
     element.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -288,9 +348,14 @@ if (!window.screenCopilotInjected) {
       <div style="padding: 10px; border: 1px solid #333; border-radius: 8px;">
         <p style="margin:0 0 10px 0;"><strong>Step ${currentStepIndex + 1} of ${playbackGuide.steps.length}</strong></p>
         <p style="margin:0 0 15px 0;">${step.instruction}</p>
-        <button class="sc-next-step-btn" style="background:#007bff;color:white;padding:6px 10px;border:none;border-radius:8px;cursor:pointer;">
-          Next Step &rarr;
-        </button>
+        ${!isLastStep ? 
+          `<button class="sc-next-step-btn" style="background:#007bff;color:white;padding:6px 10px;border:none;border-radius:8px;cursor:pointer;">
+            Next Step &rarr;
+          </button>` :
+          `<button class="sc-next-step-btn" style="background:#28a745;color:white;padding:6px 10px;border:none;border-radius:8px;cursor:pointer;">
+            Finish Guide
+          </button>`
+        }
         <button class="sc-stop-playback-btn" style="background:#aaa;color:white;padding:6px 10px;border:none;border-radius:8px;cursor:pointer;margin-left: 5px;">
           Stop
         </button>
@@ -302,13 +367,35 @@ if (!window.screenCopilotInjected) {
     const stopBtn = msgElement.querySelector(".sc-stop-playback-btn");
 
     if (nextBtn) {
-        nextBtn.onclick = () => {
-        currentStepIndex++;
-        showPlaybackStep();
+        nextBtn.onclick = (e) => {
+          e.stopPropagation();
+          const currentElement = document.querySelector(step.selector);
+          
+          if (currentElement) {
+            const action = step.action || 'click'; 
+            if (action === 'type' && (currentElement.tagName === 'INPUT' || currentElement.tagName === 'TEXTAREA')) {
+                currentElement.value = step.value;
+            } else if (action === 'type' && currentElement.isContentEditable) {
+                currentElement.innerText = step.value;
+            } else if (typeof currentElement.click === 'function') {
+                currentElement.click(); 
+            }
+          } else {
+             console.warn(`NexAura: Element for step ${currentStepIndex + 1} not found during click.`);
+          }
+
+          currentStepIndex++;
+          // Give the page time to react to the click (e.g., open modal, navigate)
+          setTimeout(() => {
+            showPlaybackStep();
+          }, 500); 
       };
     }
     if (stopBtn) {
-        stopBtn.onclick = finishPlayback;
+        stopBtn.onclick = (e) => {
+          e.stopPropagation();
+          finishPlayback();
+        }
     }
   }
   
@@ -318,13 +405,14 @@ if (!window.screenCopilotInjected) {
     appendMessage("bot", "Guide finished!");
     playbackGuide = null;
     currentStepIndex = 0;
-    showLiveHighlight([]); // Clear highlights
+    showLiveHighlight([]); 
   }
 
 
   // -------------------
-  // Floating Chat Icon
+  // --- UI & Other Functions ---
   // -------------------
+
   const chatIcon = document.createElement("div");
   Object.assign(chatIcon.style, {
     position: "fixed",
@@ -345,9 +433,6 @@ if (!window.screenCopilotInjected) {
   chatIcon.innerHTML = "💬";
   document.body.appendChild(chatIcon);
 
-  // -------------------
-  // Chatbot Container
-  // -------------------
   const container = document.createElement("div");
   Object.assign(container.style, {
     position: "fixed",
@@ -426,10 +511,7 @@ if (!window.screenCopilotInjected) {
   container.appendChild(inputBox);
   document.body.appendChild(container);
 
-  // -------------------
   // --- Message Helpers ---
-  // -------------------
-
   function appendMessage(role, content, asHTML = false) {
     const msgDiv = document.createElement("div");
     let align = "left";
@@ -463,12 +545,10 @@ if (!window.screenCopilotInjected) {
     
     messages.appendChild(msgDiv);
     messages.scrollTop = messages.scrollHeight;
-    return msgDiv; // Return the element
+    return msgDiv; 
   }
 
-  // -------------------
-  // Toggle Chat
-  // -------------------
+  // --- Toggle Chat ---
   chatIcon.onclick = () => {
     container.style.display =
       container.style.display === "flex" ? "none" : "flex";
@@ -481,23 +561,27 @@ if (!window.screenCopilotInjected) {
       sendResponse({ success: true });
     }
     
-    if (message.type === "START_RECORDING") {
+    // This is the message from popup.js
+    if (message.type === "START_RECORDING_UI") {
       isRecording = true;
-      currentGuideSteps = [];
-      recordingBar.style.display = "block";
-      document.body.addEventListener("click", onRecordClick, true);
+      showRecordingBar(); // Call the function to show the bar
       sendResponse({ success: true });
     }
     
-    // We are not returning an async response here, so return false or nothing.
-    // This fixes the "message channel closed" warning.
     return false; 
   });
 
+  // --- NEW: Check storage on page load ---
+  // This is the fix for multi-page recording
+  chrome.storage.local.get("isRecording", (result) => {
+    if (result.isRecording) {
+      isRecording = true;
+      showRecordingBar();
+    }
+  });
 
-  // -------------------
-  // Show Live Highlight with Summary
-  // -------------------
+
+  // --- Show Live Highlight ---
   function showLiveHighlight(highlights, duration = 5000) {
     const existingHighlights = document.querySelectorAll(
       ".screen-copilot-highlight-wrapper"
@@ -572,9 +656,7 @@ if (!window.screenCopilotInjected) {
     });
   }
 
-  // -------------------
-  // Render AI Copilot Response
-  // -------------------
+  // --- Render AI Copilot Response ---
   function renderCopilotResponse(data) {
     if (!data) return "<span style='color:red'>No data returned</span>";
 
@@ -607,23 +689,20 @@ if (!window.screenCopilotInjected) {
     return html;
   }
 
-  // -------------------
-  // --- UPDATED: handleSendMessage (Handles AI + Playback from DB) ---
-  // -------------------
+  // --- handleSendMessage (Handles AI + Playback from DB) ---
   async function handleSendMessage() {
     const userMsg = input.value.trim();
     if (!userMsg) return;
     
-    if (playbackGuide) return; // Don't send if in playback mode
+    if (playbackGuide) return; 
 
     appendMessage("user", userMsg);
     const userInputForLater = userMsg;
     input.value = "";
     messages.scrollTop = messages.scrollHeight;
 
-    // --- NEW: Check for Playback Command ---
+    // Check for Playback Command
     if (userInputForLater.startsWith("/")) {
-      // Get token from storage
       chrome.storage.local.get("nexaura_token", async (result) => {
         if (!result.nexaura_token) {
           appendMessage("bot", "<strong>Error:</strong> You are not logged in. Please log in from the extension's landing page.", true);
@@ -633,7 +712,6 @@ if (!window.screenCopilotInjected) {
         const loadingMsg = appendMessage("bot", "Finding your guide...");
 
         try {
-          // Fetch *all* user guides from the secure backend
           const response = await fetch("http://127.0.0.1:8000/api/guides/", {
             method: "GET",
             headers: {
@@ -649,11 +727,10 @@ if (!window.screenCopilotInjected) {
           }
 
           const allGuides = await response.json();
-          // Find the guide by shortcut
           const foundGuide = allGuides.find(g => g.shortcut === userInputForLater);
 
           if (foundGuide) {
-            startPlayback(foundGuide);
+            startPlayback(foundGuide); 
           } else {
             appendMessage("bot", `Sorry, I couldn't find a guide with the shortcut <strong>${userInputForLater}</strong>.`, true);
           }
@@ -662,7 +739,7 @@ if (!window.screenCopilotInjected) {
           appendMessage("bot", `<strong>Error:</strong> ${err.message}`, true);
         }
       });
-      return; // Stop here, don't send to AI
+      return; 
     }
     
     // --- Existing AI Logic ---
@@ -675,8 +752,6 @@ if (!window.screenCopilotInjected) {
       const res = await fetch("http://127.0.0.1:8000/api/analyze/analyze_live", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        // NOTE: If your AI endpoint requires auth, you must add
-        // the "Authorization" header here too.
         body: JSON.stringify({ image_base64: screenshot, question: userInputForLater }),
       });
 
@@ -706,17 +781,13 @@ if (!window.screenCopilotInjected) {
   });
 
 
-  // -------------------
-  // Capture Screen
-  // -------------------
+  // --- Capture Screen ---
   function captureScreen() {
     return new Promise((resolve, reject) => {
       chrome.runtime.sendMessage({ type: "CAPTURE_SCREEN" }, (response) => {
         if (chrome.runtime.lastError) {
-          // Check for a specific error
           if (chrome.runtime.lastError.message.includes("The message port closed before a response was received.")) {
-             console.warn("NexAura: Capture screen failed, possibly due to page reload. Retrying...");
-             // You could optionally retry here
+             console.warn("NexAura: Capture screen failed, possibly due to page reload.");
           }
           return reject(new Error(chrome.runtime.lastError.message));
         }
@@ -728,9 +799,7 @@ if (!window.screenCopilotInjected) {
     });
   }
 
-  // -------------------
-  // Animation Style
-  // -------------------
+  // --- Animation Style ---
   const style = document.createElement("style");
   style.textContent = `
     @keyframes pulse {

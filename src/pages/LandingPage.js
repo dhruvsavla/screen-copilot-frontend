@@ -1,28 +1,22 @@
 import React from 'react';
-import '../App.css'; 
-import '../LandingPage.css'; // This file will hold the new styles
+// import '../App.css'; // You can probably remove this if it's empty
+import '../LandingPage.css'; 
 
 // This is your existing logo file
-import logo from '../screen-copilot-extension/icons/Logo.png'; 
+// We can remove the logo import, as the Navbar handles it
+// import logo from '../screen-copilot-extension/icons/Logo.png'; 
 
-function App() {
+// Renamed function from App to LandingPage
+function LandingPage() { 
   const CHROME_STORE_URL = "https://chrome.google.com/webstore/category/extensions"; // Replace with your actual store link
 
   return (
     <div className="landing-page">
-      <header className="header">
-        <div className="container">
-          <div className="logo">
-            <img src={logo} alt="NexAura Logo" />
-            <h1>Nex<span className="logo-highlight">A</span>ura</h1>
-          </div>
-          <nav>
-            <a href="#features">Features</a>
-            <a href="#how-it-works">How It Works</a>
-            <a href={CHROME_STORE_URL} className="cta-button secondary">Add to Chrome</a>
-          </nav>
-        </div>
-      </header>
+      {/* The <header>...</header> block that was here (lines 13-28) 
+      has been DELETED. Your main App.js file now renders
+      the <Navbar /> component on all pages.
+
+      */}
 
       <section className="hero">
         <div className="container">
@@ -124,4 +118,4 @@ function App() {
   );
 }
 
-export default App;
+export default LandingPage; // Make sure this is LandingPage

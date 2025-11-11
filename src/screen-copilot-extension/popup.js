@@ -19,8 +19,7 @@ document.getElementById("toggleChatbot").addEventListener("click", async () => {
   }
 });
 
-// --- NEW ---
-// Add listener for the new "Create Guide" button
+// --- *** THIS IS THE CORRECTED FUNCTION *** ---
 document.getElementById("recordGuideBtn").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -29,18 +28,25 @@ document.getElementById("recordGuideBtn").addEventListener("click", async () => 
     return;
   }
 
-  // Inject content script first
   try {
+    // 1. Set the recording state in storage for multi-page recording
+    await chrome.storage.local.set({ 
+      isRecording: true, 
+      currentGuideSteps: [] // Clear any old steps
+    });
+
+    // 2. Inject the content script
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["content.js"],
     });
 
-    // Send a message to START recording
-    chrome.tabs.sendMessage(tab.id, { type: "START_RECORDING" });
+    // 3. Send the *correct* message to the tab to *start* the UI
+    //    (popup.js was sending START_RECORDING, content.js was listening for START_RECORDING_UI)
+    chrome.tabs.sendMessage(tab.id, { type: "START_RECORDING_UI" });
     window.close(); // Close the popup after starting
   } catch (e) {
-    console.error("Failed to inject script or send message:", e);
+    console.error("Failed to start recording:", e);
   }
 });
 
