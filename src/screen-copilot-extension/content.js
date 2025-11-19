@@ -18,71 +18,57 @@ if (!window.screenCopilotInjected) {
 
 
   // --- Global State Variables ---
-  // These are now just local "caches" of the true state,
-  // which will be held in chrome.storage.
   let isRecording = false;
   let playbackGuide = null;
   let currentStepIndex = 0;
   let isProgrammaticallyClicking = false;
 
-  // --- ROBUST CSS Selector Generator ---
+  // --- *** FINAL, CORRECTED CSS SELECTOR GENERATOR *** ---
+  // This logic stops climbing when it finds a stable attribute (like aria-label)
   function getCssSelector(el) {
     if (!(el instanceof Element)) return;
     const path = [];
-    while (el.nodeType === Node.ELEMENT_NODE) {
-      let selector = el.nodeName.toLowerCase();
-      let foundStableAttr = false;
-      let stableClasses = []; // <-- FIX: Declared at the top of the loop
-
+    let currentEl = el;
+    
+    while (currentEl && currentEl.nodeType === Node.ELEMENT_NODE) {
+      let selector = currentEl.nodeName.toLowerCase();
+      
       // 1. Stable ID
-      const id = el.id;
+      const id = currentEl.id;
       const isStableId = id && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(id);
       if (isStableId) {
         selector += '#' + id;
-        path.unshift(selector);
-        break; 
+        return selector; // Return ONLY the stable ID selector
       }
 
-      // 2. Stable, unique attributes
+      // 2. Stable, unique attributes (Fixes a[aria-label] > span bug)
       const stableAttrs = ['data-testid', 'data-test-id', 'name', 'aria-label', 'placeholder', 'role'];
       for (const attr of stableAttrs) {
-        const value = el.getAttribute(attr);
+        const value = currentEl.getAttribute(attr);
         if (value) {
           selector += `[${attr}="${value}"]`;
-          foundStableAttr = true;
-          break; 
+          return selector; // Return ONLY the stable attribute selector
         }
       }
       
-      // 3. Stable Classes (ONLY if no stable attribute was found)
-      if (!foundStableAttr) {
-        stableClasses = Array.from(el.classList) 
-          .filter(c => /^[a-zA-Z_-]+$/.test(c)); 
-        if (stableClasses.length > 0) {
-          selector += '.' + stableClasses.join('.');
-        }
-      }
-
-      // 4. Fallback to nth-of-type (ONLY if no stable attr OR classes)
-      if (!foundStableAttr && stableClasses.length === 0) {
-        let sib = el,
+      // 3. Fallback (if no stable attrs/ID)
+      const stableClasses = Array.from(currentEl.classList) 
+        .filter(c => /^[a-zA-Z_-]+$/.test(c)); 
+      if (stableClasses.length > 0) {
+        selector += '.' + stableClasses.join('.');
+      } else {
+        let sib = currentEl,
           nth = 1;
         while ((sib = sib.previousElementSibling)) {
-          if (sib.nodeName.toLowerCase() === el.nodeName.toLowerCase()) nth++;
+          if (sib.nodeName.toLowerCase() === currentEl.nodeName.toLowerCase()) nth++;
         }
-        
         if (nth > 1) {
           selector += `:nth-of-type(${nth})`;
         }
       }
 
       path.unshift(selector);
-
-      if (foundStableAttr) {
-        break;
-      }
-
-      el = el.parentNode;
+      currentEl = currentEl.parentNode;
     }
     return path.join(' > ');
   }
@@ -115,22 +101,18 @@ if (!window.screenCopilotInjected) {
   `;
   document.body.appendChild(recordingBar);
 
-  // --- NEW: Function to show and activate the recording bar ---
   function showRecordingBar() {
     recordingBar.style.display = "block";
     
-    // Attach listener for stopping
     document.getElementById("sc-stop-recording").onclick = () => {
       isRecording = false;
       recordingBar.style.display = "none";
       document.body.removeEventListener("click", onRecordClick, true);
 
-      // Get steps from storage, not a local variable
       chrome.storage.local.get(["currentGuideSteps", "nexaura_token"], async (result) => {
         const currentGuideSteps = result.currentGuideSteps || [];
         const token = result.nexaura_token;
 
-        // **Clear recording state from storage**
         await chrome.storage.local.set({ isRecording: false, currentGuideSteps: [] });
 
         if (currentGuideSteps.length > 0) {
@@ -150,7 +132,7 @@ if (!window.screenCopilotInjected) {
             name: guideName,
             shortcut: guideShortcut,
             description: guideDescription,
-            steps: currentGuideSteps, // Use steps from storage
+            steps: currentGuideSteps,
           };
 
           if (!token) {
@@ -186,17 +168,15 @@ if (!window.screenCopilotInjected) {
       });
     };
     
-    // Attach listener for recording
     document.body.addEventListener("click", onRecordClick, true);
   }
 
-  // --- UPDATED: Recording Click Listener ---
+  // --- Recording Click Listener ---
   async function onRecordClick(event) {
     if (!isRecording || isProgrammaticallyClicking) {
       return;
     }
 
-    // Don't record clicks on our own UI
     if (event.target.id === "sc-stop-recording" || 
         recordingBar.contains(event.target) || 
         container.contains(event.target) || 
@@ -220,21 +200,27 @@ if (!window.screenCopilotInjected) {
     }
 
     const rect = target.getBoundingClientRect();
+    
+    // *** TYPO FIXED HERE ***
     showLiveHighlight([{ 
       x: rect.left, 
       y: rect.top, 
       w: rect.width, 
-      h: rect.height, 
+      h: rect.height, // <- Colon added!
       summary: "Adding step for this element..." 
     }], 2000);
+    // *** END TYPO FIX ***
 
-    const instruction = prompt(`Step ${currentGuideSteps.length + 1}: What should the user do here?`);
+    const result = await chrome.storage.local.get("currentGuideSteps");
+    const currentSteps = result.currentGuideSteps || [];
+    
+    const instruction = prompt(`Step ${currentSteps.length + 1}: What should the user do here?`);
     
     if (instruction) {
       const isInput = (target.tagName === 'INPUT' && (target.type === 'text' || target.type === 'email' || target.type === 'password' || target.type === 'search')) || target.tagName === 'TEXTAREA';
       const isContentEditable = target.isContentEditable;
       
-      let actionType = 'click';
+      let actionType = 'click'; // Default
       let value = null;
 
       if (isInput) {
@@ -243,6 +229,10 @@ if (!window.screenCopilotInjected) {
       } else if (isContentEditable) {
         actionType = 'type';
         value = target.innerText;
+      } else {
+        if (!confirm("Should the guide automatically CLICK this element during playback?\n\n- Click 'OK' for navigation (e.g., open menu, go to page).\n- Click 'Cancel' to only HIGHLIGHT (e.g., for copy buttons).")) {
+          actionType = 'highlight'; // New action type!
+        }
       }
 
       const newStep = {
@@ -250,31 +240,29 @@ if (!window.screenCopilotInjected) {
         instruction: instruction,
         action: actionType,
         value: value,
-        // NEW: Save the URL to check for navigation
         url: window.location.href 
       };
 
-      // *** NEW: Save to storage instead of local array ***
-      const result = await chrome.storage.local.get("currentGuideSteps");
-      const steps = result.currentGuideSteps || [];
-      steps.push(newStep);
-      await chrome.storage.local.set({ currentGuideSteps: steps });
+      currentSteps.push(newStep);
+      await chrome.storage.local.set({ currentGuideSteps: currentSteps });
       
-      console.log("Added step:", newStep);
+      console.log("Added step:", newStep); 
+
+      isProgrammaticallyClicking = true;
+      if (typeof target.click === 'function' && actionType === 'click') {
+          target.click();
+      } else if (actionType === 'type') {
+          target.focus(); 
+      }
+      // If action is 'highlight', do nothing.
+      setTimeout(() => {
+        isProgrammaticallyClicking = false;
+      }, 100);
 
     } else {
-      return; // User cancelled prompt, do not click
+      // User cancelled prompt, do nothing.
+      return; 
     }
-
-    isProgrammaticallyClicking = true;
-    if (typeof target.click === 'function' && currentGuideSteps[currentGuideSteps.length - 1].action === 'click') {
-        target.click();
-    } else {
-        target.focus();
-    }
-    setTimeout(() => {
-      isProgrammaticallyClicking = false;
-    }, 100); // 100ms delay
   }
 
   // -------------------
@@ -285,11 +273,12 @@ if (!window.screenCopilotInjected) {
     playbackGuide = guide;
     currentStepIndex = 0;
     container.style.display = "flex"; 
-    showPlaybackStep();
+    // Start playback with 10 retries
+    showPlaybackStep(10);
   }
 
-  // --- UPDATED: Playback Step Logic ---
-  function showPlaybackStep() {
+  // --- Playback Step Logic (with Retry and Click Fix) ---
+  function showPlaybackStep(retries = 10) {
     if (!playbackGuide) return; 
 
     const isLastStep = currentStepIndex === playbackGuide.steps.length - 1;
@@ -302,14 +291,12 @@ if (!window.screenCopilotInjected) {
     const step = playbackGuide.steps[currentStepIndex];
     let element = null;
     
-    // NEW: Check if the URL matches before finding the element
     if (step.url && !window.location.href.startsWith(step.url)) {
         appendMessage(
             "bot",
             `<strong>Error:</strong> This step was recorded on a different page. Please navigate to <strong>${step.url}</strong> and try again.`,
             true
         );
-        // Don't finish, just wait for the user to navigate
         return;
     }
     
@@ -321,6 +308,17 @@ if (!window.screenCopilotInjected) {
     }
 
     if (!element) {
+      // --- RETRY LOGIC ---
+      if (retries > 0) {
+        console.warn(`Element not found, ${retries} retries left. Retrying in 100ms...`);
+        setTimeout(() => {
+          showPlaybackStep(retries - 1); // Pass decremented retry count
+        }, 100);
+        return; // Stop execution for this attempt
+      }
+      // --- END RETRY LOGIC ---
+
+      // If retries are 0, then we fail
       appendMessage(
         "bot",
         `<strong>Error:</strong> Could not find element for step ${currentStepIndex + 1}. (Selector: <code>${step.selector}</code>)`,
@@ -329,6 +327,9 @@ if (!window.screenCopilotInjected) {
       finishPlayback();
       return; 
     }
+
+    // If we get here, element was found
+    console.log("Element FOUND:", element);
 
     const rect = element.getBoundingClientRect();
     showLiveHighlight(
@@ -342,7 +343,9 @@ if (!window.screenCopilotInjected) {
       60000 
     );
     
-    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (step.action !== 'highlight') {
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
 
     const stepHtml = `
       <div style="padding: 10px; border: 1px solid #333; border-radius: 8px;">
@@ -368,31 +371,37 @@ if (!window.screenCopilotInjected) {
 
     if (nextBtn) {
         nextBtn.onclick = (e) => {
+          // --- CLICK-OUTSIDE FIX ---
+          e.preventDefault();
           e.stopPropagation();
+          // --- END OF FIX ---
+
           const currentElement = document.querySelector(step.selector);
           
           if (currentElement) {
             const action = step.action || 'click'; 
+
             if (action === 'type' && (currentElement.tagName === 'INPUT' || currentElement.tagName === 'TEXTAREA')) {
                 currentElement.value = step.value;
             } else if (action === 'type' && currentElement.isContentEditable) {
                 currentElement.innerText = step.value;
-            } else if (typeof currentElement.click === 'function') {
+            } else if (action === 'click' && typeof currentElement.click === 'function') {
                 currentElement.click(); 
             }
+            // If action is 'highlight', we do nothing.
           } else {
              console.warn(`NexAura: Element for step ${currentStepIndex + 1} not found during click.`);
           }
 
           currentStepIndex++;
-          // Give the page time to react to the click (e.g., open modal, navigate)
-          setTimeout(() => {
-            showPlaybackStep();
-          }, 500); 
+          
+          // Call next step, starting with 10 retries
+          showPlaybackStep(10);
       };
     }
     if (stopBtn) {
         stopBtn.onclick = (e) => {
+          e.preventDefault();
           e.stopPropagation();
           finishPlayback();
         }
@@ -561,18 +570,16 @@ if (!window.screenCopilotInjected) {
       sendResponse({ success: true });
     }
     
-    // This is the message from popup.js
     if (message.type === "START_RECORDING_UI") {
       isRecording = true;
-      showRecordingBar(); // Call the function to show the bar
+      showRecordingBar();
       sendResponse({ success: true });
     }
     
-    return false; 
+    return true; 
   });
 
-  // --- NEW: Check storage on page load ---
-  // This is the fix for multi-page recording
+  // --- Check storage on page load ---
   chrome.storage.local.get("isRecording", (result) => {
     if (result.isRecording) {
       isRecording = true;
