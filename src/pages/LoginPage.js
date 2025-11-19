@@ -52,7 +52,7 @@ const LoginPage = () => {
 
       // --- *** THIS IS THE NEW ROBUST FIX *** ---
       
-      // 1. Tell React state about the new token
+      // 1. TELL REACT STATE ABOUT THE NEW TOKEN
       login(token); 
       
       // 2. Try to send the token to content.js.

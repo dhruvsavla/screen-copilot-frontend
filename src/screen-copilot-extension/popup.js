@@ -1,3 +1,4 @@
+// Toggle Chatbot (Opens Floating Widget)
 document.getElementById("toggleChatbot").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -6,20 +7,33 @@ document.getElementById("toggleChatbot").addEventListener("click", async () => {
     return;
   }
 
-  // Inject content script into active tab
   try {
+    // Inject content script if not already injected
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["content.js"],
     });
-    // Send message to *toggle* the chat
-    chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_CHAT" });
+
+    // Small delay to ensure script is loaded
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Send message to toggle the floating widget
+    chrome.tabs.sendMessage(tab.id, { type: "TOGGLE_CHAT" }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error("Error toggling chat:", chrome.runtime.lastError);
+      } else {
+        console.log("Floating widget toggled:", response);
+      }
+    });
+
+    window.close(); // Close popup after opening widget
   } catch (e) {
     console.error("Failed to inject script or send message:", e);
+    alert("Failed to open NexAura. Please refresh the page and try again.");
   }
 });
 
-// --- *** THIS IS THE CORRECTED FUNCTION *** ---
+// Record New Guide
 document.getElementById("recordGuideBtn").addEventListener("click", async () => {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
@@ -29,31 +43,36 @@ document.getElementById("recordGuideBtn").addEventListener("click", async () => 
   }
 
   try {
-    // 1. Set the recording state in storage for multi-page recording
-    await chrome.storage.local.set({ 
-      isRecording: true, 
-      currentGuideSteps: [] // Clear any old steps
-    });
-
-    // 2. Inject the content script
+    // Inject content script if not already injected
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
       files: ["content.js"],
     });
 
-    // 3. Send the *correct* message to the tab to *start* the UI
-    //    (popup.js was sending START_RECORDING, content.js was listening for START_RECORDING_UI)
-    chrome.tabs.sendMessage(tab.id, { type: "START_RECORDING_UI" });
-    window.close(); // Close the popup after starting
+    // Small delay to ensure script is loaded
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Send message to start recording
+    chrome.tabs.sendMessage(tab.id, { type: "START_RECORDING" }, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error("Error starting recording:", chrome.runtime.lastError);
+        alert("Failed to start recording. Please refresh the page and try again.");
+      } else {
+        console.log("Recording started successfully:", response);
+      }
+    });
+
+    window.close(); // Close popup after starting recording
   } catch (e) {
     console.error("Failed to start recording:", e);
+    alert("Failed to start recording. Please refresh the page and try again.");
   }
 });
 
 // Wake up service worker (if needed)
 chrome.runtime.sendMessage({ type: "PING" }, (response) => {
   if (chrome.runtime.lastError) {
-    /* ignore */
+    // Ignore error if service worker isn't listening
   } else {
     console.log("Service worker status:", response?.status);
   }
